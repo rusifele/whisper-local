@@ -12,8 +12,32 @@ class AppDelegate(NSObject):
 
 _delegate = None
 
+# Keeps a hidden Tk root alive for the whole process. Tk 9.0 on macOS installs
+# its own TKApplication *subclass* as the shared NSApplication the first time a
+# root window is created. If pyobjc beats Tk to NSApplication.sharedApplication()
+# (creating a plain NSApplication instead), every later Tk() call — the first-run
+# welcome window, the level overlay — aborts with "-[NSApplication macOSVersion]:
+# unrecognized selector". Pre-creating Tk first lets pyobjc and Tk widgets share
+# the same TKApplication instance instead of fighting over the class identity.
+_tk_preload_root = None
+
+
+# Establishes Tk's TKApplication as the shared NSApplication before pyobjc
+# creates one. Best-effort: if Tk is unavailable we fall back to a plain
+# NSApplication and callers that need Tk (welcome window) skip themselves.
+def _preload_tk():
+    global _tk_preload_root
+    try:
+        import tkinter as tk
+        _tk_preload_root = tk.Tk()
+        _tk_preload_root.withdraw()
+    except Exception:
+        _tk_preload_root = None
+
+
 def setup():
     global _delegate
+    _preload_tk()
     app = NSApplication.sharedApplication()
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
     _delegate = AppDelegate.alloc().init()

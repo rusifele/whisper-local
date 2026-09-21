@@ -612,6 +612,7 @@ def main():
             if is_first_run():
                 show_welcome_window(
                     hotkey_label=beautify_hotkey(hotkey_config.get('recording_hotkey', 'ctrl+win')),
+                    shutdown_event=shutdown_event,
                 )
         except Exception as e:
             logger.debug(f"First-run welcome skipped: {e}")

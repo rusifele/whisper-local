@@ -6,6 +6,7 @@
 # wizard lives in setup_wizard.py for users who run `--setup` explicitly.
 
 import logging
+import sys
 import threading
 from pathlib import Path
 
@@ -34,13 +35,19 @@ def mark_first_run_complete():
         logger.debug(f"Could not write first-run flag: {e}")
 
 
-# Spawns the welcome window on a daemon thread so it doesn't block the main
-# app from starting up. `hotkey_label` is the user's *current* configured
-# recording hotkey, displayed in the tip text so it's accurate.
-def show_welcome_window(on_close=None, hotkey_label: str = "Ctrl+Win"):
+# Shows the welcome window. macOS runs it synchronously on the calling (main)
+# thread because Tk on macOS requires the main thread — the app is fully started
+# by the time this fires, so blocking until dismissal is acceptable. Other
+# platforms keep the daemon thread so startup isn't blocked. `shutdown_event`,
+# when given, lets a SIGTERM/SIGINT received while this window is still open
+# close it instead of leaving the process stuck (see _run_welcome).
+def show_welcome_window(on_close=None, hotkey_label: str = "Ctrl+Win", shutdown_event=None):
+    if sys.platform == 'darwin':
+        _run_welcome(on_close, hotkey_label, shutdown_event)
+        return
     threading.Thread(
         target=_run_welcome,
-        args=(on_close, hotkey_label),
+        args=(on_close, hotkey_label, shutdown_event),
         daemon=True,
         name='welcome-window',
     ).start()
@@ -50,7 +57,7 @@ def show_welcome_window(on_close=None, hotkey_label: str = "Ctrl+Win"):
 # (the caller gates on a marker file); `on_close` fires afterwards so first-run
 # follow-ups — such as the autostart prompt — happen only after the user has
 # actually seen and dismissed this.
-def _run_welcome(on_close, hotkey_label):
+def _run_welcome(on_close, hotkey_label, shutdown_event=None):
     try:
         import tkinter as tk
     except ImportError:
@@ -136,8 +143,12 @@ def _run_welcome(on_close, hotkey_label):
                 autostart.enable()
             except Exception as e:
                 logger.debug(f"Autostart enable from welcome failed: {e}")
+        # quit(), not destroy(): see the _pump comment below — destroying this
+        # root directly left mainloop() hanging forever (confirmed on macOS),
+        # so quit() unblocks it here and the real teardown happens once
+        # mainloop() actually returns, just after this function's caller.
         try:
-            root.destroy()
+            root.quit()
         except Exception:
             pass
         if on_close:
@@ -148,4 +159,32 @@ def _run_welcome(on_close, hotkey_label):
               padx=22, pady=6, font=('Segoe UI', 10, 'bold')).pack(side='right')
 
     root.protocol("WM_DELETE_WINDOW", _done)
+
+    # The app's SIGTERM/SIGINT handler only sets shutdown_event — it's
+    # app.run_event_loop() (reached long after this call returns) that acts on
+    # it. While this window sits open and blocking on macOS, that event is
+    # never polled, so `kill` and Ctrl+C were silently swallowed (confirmed:
+    # the process didn't exit). Poll it here and unblock mainloop() so a
+    # signal received during first-run still shuts the app down instead of
+    # leaving a zombie window that only a force-kill can clear.
+    #
+    # quit() (stop mainloop(), keep widgets alive) rather than destroy() (tear
+    # widgets down immediately): with the hidden Tk root that platform/macos/
+    # app.py's _preload_tk() keeps alive for the process lifetime, destroying
+    # this window's root outright left mainloop() never returning — quit()
+    # unwinds cleanly, and destroy() right after does the actual teardown.
+    def _pump():
+        if shutdown_event is not None and shutdown_event.is_set():
+            try:
+                root.quit()
+            except Exception:
+                pass
+            return
+        root.after(200, _pump)
+    root.after(200, _pump)
+
     root.mainloop()
+    try:
+        root.destroy()
+    except Exception:
+        pass

@@ -2,6 +2,31 @@
 
 History inherited from upstream [`whisper-key-local`](https://github.com/PinW/whisper-key-local). Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **macOS: the app aborted during startup, before the hotkey was ever registered**
+  ([#14](https://github.com/drajb/whisper-local/issues/14), @rusifele). Tk 9 installs
+  its own `NSApplication` subclass (`TKApplication`) the first time a Tk root is
+  created, and its drawing code calls selectors that exist only on that subclass.
+  `platform/macos/app.setup()` won the race and installed a plain `NSApplication`,
+  so the `tk.Tk()` in `LevelOverlay`'s thread raised
+  `-[NSApplication macOSVersion]: unrecognized selector` — an Objective-C
+  `NSException`, not a Python exception, so the `except Exception` in
+  `LevelOverlay._run()` could not catch it and the process `abort()`ed with
+  nothing in the log. A hidden Tk root is now created before
+  `NSApplication.sharedApplication()`, so pyobjc and every later Tk widget share
+  one `TKApplication`. The level overlay is skipped on macOS besides: Tk wants its
+  mainloop on the main thread, which the tray already owns.
+- **macOS: the first-run welcome window hung after dismissal.** Keeping a hidden
+  Tk root alive for the process lifetime (above) means `root.destroy()` on the
+  welcome window no longer unblocks its `mainloop()` — confirmed on-device, it
+  never returned. Both the "Got it" handler and `WM_DELETE_WINDOW` now `quit()`
+  first and let the caller `destroy()` once `mainloop()` has returned. The window
+  also runs on the main thread on macOS, and polls `shutdown_event`, so a
+  `SIGTERM`/`SIGINT` arriving while it is open shuts the app down instead of being
+  silently swallowed.
+
 ## [0.19.0]
 
 Everything reported by users on 0.18.3.

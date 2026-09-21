@@ -7,6 +7,7 @@
 
 import logging
 import platform
+import sys
 import threading
 from typing import Callable, Optional
 
@@ -69,6 +70,14 @@ class LevelOverlay:
             return False
 
     def start(self):
+        if sys.platform == 'darwin':
+            # Tk on macOS requires its event loop on the main thread, but this
+            # HUD is driven from a background thread — an unsupported combo that
+            # aborts the whole process at the C level (not catchable) on launch.
+            # Disable the overlay here rather than crash the app every startup.
+            logger.info("Level overlay disabled on macOS (Tk must run on the main thread)")
+            self._available = False
+            return
         if not self._available or (self._thread and self._thread.is_alive()):
             return
         self._thread = threading.Thread(target=self._run, daemon=True, name='level-overlay')
